@@ -56,7 +56,7 @@ export async function processPayrollFile(
   let resolvedCompanyId = companyId
   if (!resolvedCompanyId && detectedCompanyName) {
     const company = await prisma.company.findFirst({
-      where: { name: { contains: detectedCompanyName } }
+      where: { name: { contains: detectedCompanyName, mode: 'insensitive' } }
     })
     if (company) resolvedCompanyId = company.id
     else {
@@ -93,7 +93,7 @@ export async function processPayrollFile(
       let employee = await prisma.employee.findFirst({
         where: empIdRaw
           ? { employeeId: empIdRaw }
-          : { name: empNameRaw }
+          : { name: { equals: empNameRaw, mode: 'insensitive' } }
       })
       if (!employee) {
         employee = await prisma.employee.create({
@@ -126,7 +126,7 @@ export async function processPayrollFile(
           umlage1: optNum('umlage1'), umlage2: optNum('umlage2'),
           umlagInsolv: optNum('umlage_insolv'),
           auszahlungsbetrag: netSalary,
-          rawData: JSON.stringify(row),
+          rawData: row as any,
           uploadedFileId: fileId,
         },
         create: {
@@ -140,7 +140,7 @@ export async function processPayrollFile(
           umlage1: optNum('umlage1'), umlage2: optNum('umlage2'),
           umlagInsolv: optNum('umlage_insolv'),
           auszahlungsbetrag: netSalary,
-          rawData: JSON.stringify(row),
+          rawData: row as any,
           uploadedFileId: fileId,
         }
       })
@@ -217,7 +217,7 @@ export async function processBankFile(
           amount,
           currency: getColValue(row, headers, 'currency', mappings) || 'EUR',
           inferredMonth: inferredMonth || undefined,
-          rawData: JSON.stringify(row),
+          rawData: row as any,
           uploadedFileId: fileId,
         }
       })

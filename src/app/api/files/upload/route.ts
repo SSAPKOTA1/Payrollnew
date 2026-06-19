@@ -40,8 +40,8 @@ export async function POST(req: NextRequest) {
         filePath: filePath || undefined,
         fileHash,
         fileType,
-        detectedSchema: JSON.stringify({ headers }),
-        columnMappings: JSON.stringify(columnMappings),
+        detectedSchema: { headers } as any,
+        columnMappings: columnMappings as any,
         status: 'PROCESSING',
         companyId: companyId || undefined,
       }

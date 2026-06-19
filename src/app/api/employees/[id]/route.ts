@@ -1,3 +1,12 @@
+/**
+ * GET /api/employees/[id]
+ *
+ * Full employee detail including:
+ *   - All companies the employee belongs to
+ *   - All payroll records across all months
+ *   - All reconciliation records
+ */
+
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
@@ -12,33 +21,49 @@ export async function GET(
       where: { id },
       include: {
         companies: {
-          include: { company: { select: { id: true, name: true, shortName: true, iban: true } } },
+          include: {
+            company: {
+              select: { id: true, name: true, shortName: true, iban: true },
+            },
+          },
+          orderBy: { startDate: 'desc' },
         },
         payrollRecords: {
           orderBy: { salaryMonth: 'desc' },
-          include: { company: { select: { id: true, name: true, shortName: true } } },
+          include: {
+            company: { select: { id: true, name: true, shortName: true } },
+          },
         },
         reconciliations: {
           orderBy: { salaryMonth: 'desc' },
+          include: {
+            payrollRecord: {
+              select: {
+                id: true,
+                salaryMonth: true,
+                grossSalary: true,
+                netSalary: true,
+                auszahlungsbetrag: true,
+                companyId: true,
+              },
+            },
+            bankTransaction: {
+              select: {
+                id: true,
+                bookingDate: true,
+                amount: true,
+                counterpartyName: true,
+                counterpartyIban: true,
+                purpose: true,
+              },
+            },
+          },
         },
       },
     })
 
     if (!employee) {
       return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
-    }
-
-    // Build per-month aggregation across all companies
-    const monthMap = new Map<string, { expected: number; paid: number; companies: string[] }>()
-    for (const pr of employee.payrollRecords) {
-      const existing = monthMap.get(pr.salaryMonth) ?? { expected: 0, paid: 0, companies: [] }
-      existing.expected += Number(pr.netSalary)
-      if (!existing.companies.includes(pr.companyId)) existing.companies.push(pr.companyId)
-      monthMap.set(pr.salaryMonth, existing)
-    }
-    for (const rec of employee.reconciliations) {
-      const existing = monthMap.get(rec.salaryMonth)
-      if (existing) existing.paid += Number(rec.paidAmount)
     }
 
     return NextResponse.json({
@@ -48,43 +73,67 @@ export async function GET(
       iban: employee.iban,
       taxClass: employee.taxClass,
       createdAt: employee.createdAt,
+      updatedAt: employee.updatedAt,
       companies: employee.companies.map((ce) => ({
         id: ce.company.id,
         name: ce.company.name,
         shortName: ce.company.shortName,
         iban: ce.company.iban,
-        active: ce.active,
         startDate: ce.startDate,
         endDate: ce.endDate,
+        active: ce.active,
       })),
       payrollRecords: employee.payrollRecords.map((pr) => ({
         id: pr.id,
         salaryMonth: pr.salaryMonth,
+        company: pr.company,
         grossSalary: Number(pr.grossSalary),
         netSalary: Number(pr.netSalary),
         auszahlungsbetrag: Number(pr.auszahlungsbetrag),
         lohnsteuer: pr.lohnsteuer != null ? Number(pr.lohnsteuer) : null,
-        company: pr.company,
+        kvBeitragAN: pr.kvBeitragAN != null ? Number(pr.kvBeitragAN) : null,
+        rvBeitragAN: pr.rvBeitragAN != null ? Number(pr.rvBeitragAN) : null,
+        avBeitragAN: pr.avBeitragAN != null ? Number(pr.avBeitragAN) : null,
+        pvBeitragAN: pr.pvBeitragAN != null ? Number(pr.pvBeitragAN) : null,
         createdAt: pr.createdAt,
       })),
       reconciliations: employee.reconciliations.map((rec) => ({
         id: rec.id,
-        companyId: rec.companyId,
         salaryMonth: rec.salaryMonth,
-        expectedAmount: Number(rec.expectedAmount),
-        paidAmount: Number(rec.paidAmount),
         status: rec.status,
-        confidence: rec.confidence,
-        matchedTransactionId: rec.matchedTransactionId,
+        expectedAmount: Number(rec.expectedAmount),
+        paidAmount: rec.paidAmount != null ? Number(rec.paidAmount) : null,
+        matchConfidence: rec.matchConfidence,
+        matchReasons: rec.matchReasons,
         notes: rec.notes,
+        reviewedAt: rec.reviewedAt,
+        reviewedBy: rec.reviewedBy,
         createdAt: rec.createdAt,
+        updatedAt: rec.updatedAt,
+        payrollRecord: rec.payrollRecord
+          ? {
+              id: rec.payrollRecord.id,
+              salaryMonth: rec.payrollRecord.salaryMonth,
+              grossSalary: Number(rec.payrollRecord.grossSalary),
+              netSalary: Number(rec.payrollRecord.netSalary),
+              auszahlungsbetrag: Number(rec.payrollRecord.auszahlungsbetrag),
+              companyId: rec.payrollRecord.companyId,
+            }
+          : null,
+        bankTransaction: rec.bankTransaction
+          ? {
+              id: rec.bankTransaction.id,
+              bookingDate: rec.bankTransaction.bookingDate,
+              amount: Number(rec.bankTransaction.amount),
+              counterpartyName: rec.bankTransaction.counterpartyName,
+              counterpartyIban: rec.bankTransaction.counterpartyIban,
+              purpose: rec.bankTransaction.purpose,
+            }
+          : null,
       })),
-      monthlyAggregation: Array.from(monthMap.entries())
-        .sort(([a], [b]) => b.localeCompare(a))
-        .map(([month, data]) => ({ month, ...data })),
     })
   } catch (error) {
-    console.error('[employees/[id]] GET error:', error)
+    console.error('[employees/id] GET error:', error)
     return NextResponse.json({ error: 'Failed to fetch employee' }, { status: 500 })
   }
 }

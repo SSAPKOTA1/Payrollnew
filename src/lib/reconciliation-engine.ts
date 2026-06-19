@@ -210,19 +210,9 @@ export async function runReconciliation(
   // -------------------------------------------------------------------------
   // 1. Load payroll records
   // -------------------------------------------------------------------------
-  const rawPayrollRows = await prisma.payrollRecord.findMany({
+  const payrollRows = (await (prisma as any).payrollRecord.findMany({
     where: { companyId, salaryMonth },
-    include: { employee: { select: { name: true, iban: true } } },
-  })
-  const payrollRows: PayrollRow[] = rawPayrollRows.map((r) => ({
-    id: r.id,
-    companyId: r.companyId,
-    salaryMonth: r.salaryMonth,
-    employeeId: r.employeeId,
-    employeeName: r.employee.name,
-    netSalary: Number(r.netSalary),
-    iban: r.employee.iban,
-  }))
+  })) as PayrollRow[]
 
   // -------------------------------------------------------------------------
   // 2. Load bank transactions
@@ -233,10 +223,14 @@ export async function runReconciliation(
   const windowStart = new Date(year, month - 2, 1) // 1 month before salary month
   const windowEnd = new Date(year, month + 1, 31) // 1 month after salary month
 
-  const transactions = (await prisma.bankTransaction.findMany({
+  const transactions = (await (prisma as any).bankTransaction.findMany({
     where: {
       companyId,
-      bookingDate: { gte: windowStart, lte: windowEnd },
+      bookingDate: {
+        gte: windowStart,
+        lte: windowEnd,
+      },
+      // Only consider debit transactions (positive outgoing amounts from company)
       amount: { gt: 0 },
     },
   })) as BankTransaction[]
@@ -316,7 +310,7 @@ export async function runReconciliation(
   // 5. Upsert ReconciliationRecord rows
   // -------------------------------------------------------------------------
   for (const record of records) {
-    await prisma.reconciliationRecord.upsert({
+    await (prisma as any).reconciliationRecord.upsert({
       where: {
         companyId_salaryMonth_employeeId: {
           companyId: record.companyId,
@@ -330,7 +324,7 @@ export async function runReconciliation(
         status: record.status,
         confidence: record.confidence,
         matchedTransactionId: record.matchedTransactionId,
-        notes: record.notes.join('; '),
+        notes: record.notes,
         updatedAt: new Date(),
       },
       create: {
@@ -343,7 +337,7 @@ export async function runReconciliation(
         status: record.status,
         confidence: record.confidence,
         matchedTransactionId: record.matchedTransactionId,
-        notes: record.notes.join('; '),
+        notes: record.notes,
       },
     })
   }
