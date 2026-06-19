@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+agent/node_modules/
+
+# Next.js
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Build
+dist/
+build/
+
+# Prisma
+generated/
+
+# Agent state
+agent/.payrollsync-state.json
+
+# Misc
+.DS_Store
+*.log

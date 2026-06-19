@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  shortName   String?
+  iban        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employees         CompanyEmployee[]
+  payrollRecords    PayrollRecord[]
+  bankTransactions  BankTransaction[]
+  uploadedFiles     UploadedFile[]
+}
+
+model Employee {
+  id          String   @id @default(uuid())
+  employeeId  String?
+  name        String
+  iban        String?
+  taxClass    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  companies       CompanyEmployee[]
+  payrollRecords  PayrollRecord[]
+  reconciliations ReconciliationRecord[]
+}
+
+model CompanyEmployee {
+  id         String   @id @default(uuid())
+  company    Company  @relation(fields: [companyId], references: [id])
+  companyId  String
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  employeeId String
+  startDate  DateTime?
+  endDate    DateTime?
+  active     Boolean  @default(true)
+
+  @@unique([companyId, employeeId])
+}
+
+model PayrollRecord {
+  id                  String   @id @default(uuid())
+  company             Company  @relation(fields: [companyId], references: [id])
+  companyId           String
+  employee            Employee @relation(fields: [employeeId], references: [id])
+  employeeId          String
+  salaryMonth         String
+  grossSalary         Decimal  @db.Decimal(12, 2)
+  netSalary           Decimal  @db.Decimal(12, 2)
+  lohnsteuer          Decimal? @db.Decimal(12, 2)
+  kvBeitragAN         Decimal? @db.Decimal(12, 2)
+  rvBeitragAN         Decimal? @db.Decimal(12, 2)
+  avBeitragAN         Decimal? @db.Decimal(12, 2)
+  pvBeitragAN         Decimal? @db.Decimal(12, 2)
+  kvBeitragAG         Decimal? @db.Decimal(12, 2)
+  rvBeitragAG         Decimal? @db.Decimal(12, 2)
+  avBeitragAG         Decimal? @db.Decimal(12, 2)
+  pvBeitragAG         Decimal? @db.Decimal(12, 2)
+  umlage1             Decimal? @db.Decimal(12, 2)
+  umlage2             Decimal? @db.Decimal(12, 2)
+  umlagInsolv         Decimal? @db.Decimal(12, 2)
+  auszahlungsbetrag   Decimal  @db.Decimal(12, 2)
+  rawData             Json?
+  uploadedFileId      String?
+  uploadedFile        UploadedFile? @relation(fields: [uploadedFileId], references: [id])
+  createdAt           DateTime @default(now())
+
+  reconciliations     ReconciliationRecord[]
+
+  @@unique([companyId, employeeId, salaryMonth])
+}
+
+model BankTransaction {
+  id                    String   @id @default(uuid())
+  company               Company  @relation(fields: [companyId], references: [id])
+  companyId             String
+  accountIban           String
+  bookingDate           DateTime
+  valueDate             DateTime?
+  bookingText           String?
+  purpose               String?
+  counterpartyName      String?
+  counterpartyIban      String?
+  bic                   String?
+  amount                Decimal  @db.Decimal(12, 2)
+  currency              String   @default("EUR")
+  referenceId           String?
+  inferredMonth         String?
+  rawData               Json?
+  uploadedFileId        String?
+  uploadedFile          UploadedFile? @relation(fields: [uploadedFileId], references: [id])
+  createdAt             DateTime @default(now())
+
+  reconciliations       ReconciliationRecord[]
+}
+
+model ReconciliationRecord {
+  id                    String              @id @default(uuid())
+  employee              Employee            @relation(fields: [employeeId], references: [id])
+  employeeId            String
+  payrollRecord         PayrollRecord?      @relation(fields: [payrollRecordId], references: [id])
+  payrollRecordId       String?
+  bankTransaction       BankTransaction?    @relation(fields: [bankTransactionId], references: [id])
+  bankTransactionId     String?
+  salaryMonth           String
+  expectedAmount        Decimal             @db.Decimal(12, 2)
+  paidAmount            Decimal?            @db.Decimal(12, 2)
+  status                ReconciliationStatus @default(NEEDS_REVIEW)
+  matchConfidence       Int                 @default(0)
+  matchReasons          Json?
+  notes                 String?
+  reviewedAt            DateTime?
+  reviewedBy            String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
+
+model UploadedFile {
+  id              String    @id @default(uuid())
+  company         Company?  @relation(fields: [companyId], references: [id])
+  companyId       String?
+  originalName    String
+  filePath        String?
+  fileHash        String    @unique
+  fileType        FileType
+  detectedSchema  Json?
+  columnMappings  Json?
+  rowCount        Int       @default(0)
+  status          FileStatus @default(PENDING)
+  errorMessage    String?
+  uploadedAt      DateTime  @default(now())
+  processedAt     DateTime?
+
+  payrollRecords    PayrollRecord[]
+  bankTransactions  BankTransaction[]
+}
+
+enum ReconciliationStatus {
+  PAID
+  UNPAID
+  PARTIAL
+  NEEDS_REVIEW
+  OVERPAID
+}
+
+enum FileType {
+  PAYROLL
+  BANK_TRANSACTION
+  UNKNOWN
+}
+
+enum FileStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  ERROR
+}
