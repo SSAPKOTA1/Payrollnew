@@ -9,7 +9,6 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { Prisma } from '@prisma/client'
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,7 +19,7 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '20', 10)))
     const skip = (page - 1) * limit
 
-    const where: Prisma.EmployeeWhereInput = {}
+    const where: any = {}
 
     if (companyId) {
       where.companies = { some: { companyId, active: true } }
@@ -28,9 +27,9 @@ export async function GET(request: NextRequest) {
 
     if (search) {
       where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { employeeId: { contains: search, mode: 'insensitive' } },
-        { iban: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search } },
+        { employeeId: { contains: search } },
+        { iban: { contains: search } },
       ]
     }
 
