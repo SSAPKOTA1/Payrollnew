@@ -25,6 +25,7 @@ interface EmployeeMonthRow {
   id: string
   name: string
   employeeId: string | null
+  grossSalary: number
   auszahlungsbetrag: number
   reconciliationStatus: string | null
 }
@@ -322,7 +323,8 @@ export default function CompanyDetailPage() {
                 <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
                   <th className="text-left px-5 py-3">Employee</th>
                   <th className="text-left px-5 py-3">ID</th>
-                  <th className="text-right px-5 py-3">Payout</th>
+                  <th className="text-right px-5 py-3">Gross</th>
+                  <th className="text-right px-5 py-3">Net (Payout)</th>
                   <th className="text-left px-5 py-3">Status</th>
                 </tr>
               </thead>
@@ -345,6 +347,9 @@ export default function CompanyDetailPage() {
                       </td>
                       <td className="px-5 py-3 text-gray-400 font-mono text-xs">
                         {emp.employeeId ?? '—'}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-300">
+                        {fmt(emp.grossSalary)}
                       </td>
                       <td className="px-5 py-3 text-right font-medium text-white">
                         {fmt(emp.auszahlungsbetrag)}

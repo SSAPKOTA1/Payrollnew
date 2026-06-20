@@ -84,6 +84,7 @@ export async function GET(
         id: r.employee.id,
         name: r.employee.name,
         employeeId: r.employee.employeeId,
+        grossSalary: Number(r.grossSalary),
         auszahlungsbetrag: Number(r.auszahlungsbetrag),
         reconciliationStatus: reconMap.get(r.employeeId) ?? null,
       }))
