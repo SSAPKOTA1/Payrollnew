@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { detectFileType, detectColumnMappings } from '@/lib/schema-detector'
 import { parseCSV } from '@/lib/file-parser'
 import { processPayrollFile, processBankFile } from '@/lib/file-processor'
+import { runReconciliation } from '@/lib/reconciliation-engine'
 
 export async function POST(req: NextRequest) {
   try {
@@ -76,13 +77,41 @@ export async function POST(req: NextRequest) {
       }
     })
 
+    // Auto-reconcile: find all company+month pairs that now have both payroll
+    // records AND bank transactions, and run reconciliation for each.
+    const reconErrors: string[] = []
+    try {
+      const resolvedCompanyId = result.detectedCompanyName
+        ? (await prisma.company.findFirst({ where: { name: result.detectedCompanyName } }))?.id
+        : companyId || undefined
+
+      // Find all months that have payroll data for this company
+      const whereCompany = resolvedCompanyId ? { companyId: resolvedCompanyId } : {}
+      const payrollMonths = await prisma.payrollRecord.findMany({
+        where: whereCompany,
+        select: { companyId: true, salaryMonth: true },
+        distinct: ['companyId', 'salaryMonth'],
+      })
+
+      for (const { companyId: cId, salaryMonth: sm } of payrollMonths) {
+        // Only reconcile if there are also bank transactions for this company
+        const bankCount = await prisma.bankTransaction.count({ where: { companyId: cId } })
+        if (bankCount > 0) {
+          await runReconciliation(cId, sm)
+        }
+      }
+    } catch (reconErr: any) {
+      reconErrors.push(`Reconciliation: ${reconErr.message}`)
+    }
+
     return NextResponse.json({
       fileId: uploadedFile.id,
       detectedType: fileType,
       rowCount: result.rowCount,
       columnMappings: result.columnMappings,
-      errors: result.errors.slice(0, 10),
+      errors: [...result.errors, ...reconErrors].slice(0, 10),
       status: result.errors.length === 0 ? 'PROCESSED' : 'ERROR',
+      reconciled: reconErrors.length === 0,
     })
   } catch (err: any) {
     console.error('Upload error:', err)
