@@ -208,32 +208,37 @@ export async function runReconciliation(
   salaryMonth: string
 ): Promise<ReconciliationResult> {
   // -------------------------------------------------------------------------
-  // 1. Load payroll records
+  // 1. Load payroll records (join employee for name + IBAN)
   // -------------------------------------------------------------------------
-  const payrollRows = (await (prisma as any).payrollRecord.findMany({
+  const rawPayroll = await prisma.payrollRecord.findMany({
     where: { companyId, salaryMonth },
-  })) as PayrollRow[]
+    include: { employee: { select: { name: true, iban: true } } },
+  })
+
+  const payrollRows: PayrollRow[] = rawPayroll.map((r) => ({
+    id: r.id,
+    companyId: r.companyId,
+    salaryMonth: r.salaryMonth,
+    employeeId: r.employeeId,
+    employeeName: r.employee.name,
+    netSalary: Number(r.auszahlungsbetrag),
+    iban: r.employee.iban ?? null,
+  }))
 
   // -------------------------------------------------------------------------
-  // 2. Load bank transactions
-  //    We load transactions roughly within the salary month ± 2 months to
-  //    catch late or early payments.
+  // 2. Load bank transactions (±2 months around the salary month)
   // -------------------------------------------------------------------------
   const [year, month] = salaryMonth.split('-').map(Number)
-  const windowStart = new Date(year, month - 2, 1) // 1 month before salary month
-  const windowEnd = new Date(year, month + 1, 31) // 1 month after salary month
+  const windowStart = new Date(year, month - 2, 1)
+  const windowEnd = new Date(year, month + 1, 31)
 
-  const transactions = (await (prisma as any).bankTransaction.findMany({
+  const transactions = await prisma.bankTransaction.findMany({
     where: {
       companyId,
-      bookingDate: {
-        gte: windowStart,
-        lte: windowEnd,
-      },
-      // Only consider debit transactions (positive outgoing amounts from company)
+      bookingDate: { gte: windowStart, lte: windowEnd },
       amount: { gt: 0 },
     },
-  })) as BankTransaction[]
+  }) as unknown as BankTransaction[]
 
   // -------------------------------------------------------------------------
   // 3. Score all payroll x transaction combinations
@@ -310,7 +315,18 @@ export async function runReconciliation(
   // 5. Upsert ReconciliationRecord rows
   // -------------------------------------------------------------------------
   for (const record of records) {
-    await (prisma as any).reconciliationRecord.upsert({
+    const sharedData = {
+      expectedAmount: record.expectedAmount,
+      paidAmount: record.paidAmount,
+      status: record.status,
+      matchConfidence: record.confidence,
+      matchReasons: record.notes as any,
+      notes: record.notes.join('; ') || null,
+      payrollRecordId: record.matchedTransactionId ? undefined : undefined,
+      bankTransactionId: record.matchedTransactionId ?? undefined,
+    }
+
+    await prisma.reconciliationRecord.upsert({
       where: {
         companyId_salaryMonth_employeeId: {
           companyId: record.companyId,
@@ -318,26 +334,12 @@ export async function runReconciliation(
           employeeId: record.employeeId,
         },
       },
-      update: {
-        expectedAmount: record.expectedAmount,
-        paidAmount: record.paidAmount,
-        status: record.status,
-        confidence: record.confidence,
-        matchedTransactionId: record.matchedTransactionId,
-        notes: record.notes,
-        updatedAt: new Date(),
-      },
+      update: sharedData,
       create: {
         companyId: record.companyId,
         salaryMonth: record.salaryMonth,
         employeeId: record.employeeId,
-        employeeName: record.employeeName,
-        expectedAmount: record.expectedAmount,
-        paidAmount: record.paidAmount,
-        status: record.status,
-        confidence: record.confidence,
-        matchedTransactionId: record.matchedTransactionId,
-        notes: record.notes,
+        ...sharedData,
       },
     })
   }

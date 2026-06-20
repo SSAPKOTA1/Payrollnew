@@ -19,7 +19,12 @@ function monthOffset(n: number): string {
 
 export async function GET(_request: NextRequest) {
   try {
-    const currentMonth = monthOffset(0)
+    // Use the most recent month that has payroll data; fall back to current month
+    const latestPayroll = await prisma.payrollRecord.findFirst({
+      orderBy: { salaryMonth: 'desc' },
+      select: { salaryMonth: true },
+    })
+    const currentMonth = latestPayroll?.salaryMonth ?? monthOffset(0)
 
     // -------------------------------------------------------------------------
     // 1. Current-month reconciliation status breakdown
@@ -99,10 +104,7 @@ export async function GET(_request: NextRequest) {
         // Reconciliation breakdown for this company and month
         const recon = await prisma.reconciliationRecord.groupBy({
           by: ['status'],
-          where: {
-            salaryMonth: currentMonth,
-            payrollRecord: { companyId: company.id },
-          },
+          where: { companyId: company.id, salaryMonth: currentMonth },
           _count: { id: true },
         })
 
@@ -167,7 +169,7 @@ export async function GET(_request: NextRequest) {
     const unpaidRecords = await prisma.reconciliationRecord.findMany({
       where: { salaryMonth: currentMonth, status: 'UNPAID' },
       take: 5,
-      orderBy: { expectedAmount: 'desc' },
+      orderBy: { createdAt: 'desc' },
       include: {
         employee: { select: { name: true } },
       },
@@ -178,7 +180,7 @@ export async function GET(_request: NextRequest) {
         type: 'UNPAID_SALARY',
         message: `Salary not paid for ${rec.employee.name} in ${currentMonth} (expected: €${Number(rec.expectedAmount).toFixed(2)})`,
         severity: 'HIGH',
-        createdAt: rec.updatedAt,
+        createdAt: rec.createdAt,
       })
     }
 
@@ -186,7 +188,7 @@ export async function GET(_request: NextRequest) {
     const reviewRecords = await prisma.reconciliationRecord.findMany({
       where: { salaryMonth: currentMonth, status: 'NEEDS_REVIEW' },
       take: 5,
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { createdAt: 'desc' },
       include: {
         employee: { select: { name: true } },
       },
@@ -197,7 +199,7 @@ export async function GET(_request: NextRequest) {
         type: 'NEEDS_REVIEW',
         message: `Reconciliation needs review for ${rec.employee.name} in ${currentMonth}`,
         severity: 'MEDIUM',
-        createdAt: rec.updatedAt,
+        createdAt: rec.createdAt,
       })
     }
 

@@ -19,6 +19,7 @@ model Company {
   payrollRecords    PayrollRecord[]
   bankTransactions  BankTransaction[]
   uploadedFiles     UploadedFile[]
+  reconciliations   ReconciliationRecord[]
 }
 
 model Employee {
@@ -106,6 +107,8 @@ model BankTransaction {
 
 model ReconciliationRecord {
   id                    String              @id @default(uuid())
+  company               Company             @relation(fields: [companyId], references: [id])
+  companyId             String
   employee              Employee            @relation(fields: [employeeId], references: [id])
   employeeId            String
   payrollRecord         PayrollRecord?      @relation(fields: [payrollRecordId], references: [id])
@@ -123,6 +126,8 @@ model ReconciliationRecord {
   reviewedBy            String?
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
+
+  @@unique([companyId, salaryMonth, employeeId])
 }
 
 model UploadedFile {
