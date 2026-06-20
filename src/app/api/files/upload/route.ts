@@ -29,7 +29,17 @@ export async function POST(req: NextRequest) {
     // Detect file type
     const { headers, rows, metadataLines } = parseCSV(content)
     const { type: detectedType } = detectFileType(headers, rows)
-    const fileType = (fileTypeOverride as any) || detectedType
+
+    // Filename-based fallback: lojo_*.csv files are always DATEV payroll exports
+    const nameLower = file.name.toLowerCase()
+    let fileType: 'PAYROLL' | 'BANK_TRANSACTION' | 'UNKNOWN' = (fileTypeOverride as any) || detectedType
+    if (fileType === 'UNKNOWN') {
+      if (nameLower.startsWith('lojo') || nameLower.includes('lohn') || nameLower.includes('payroll')) {
+        fileType = 'PAYROLL'
+      } else if (nameLower.includes('umsatz') || nameLower.includes('konto') || nameLower.includes('bank')) {
+        fileType = 'BANK_TRANSACTION'
+      }
+    }
     const columnMappings = detectColumnMappings(headers, rows)
 
     // Create file record

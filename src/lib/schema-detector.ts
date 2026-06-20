@@ -151,11 +151,12 @@ export function detectFileType(
   const payrollConfidence = Math.round(payrollRatio * 100)
   const bankConfidence = Math.round(bankRatio * 100)
 
-  if (payrollConfidence === 0 && bankConfidence === 0) {
+  // Only return UNKNOWN when neither side has any signal at all
+  if (payrollHits === 0 && bankHits === 0) {
     return { type: 'UNKNOWN', confidence: 0 }
   }
 
-  if (payrollConfidence >= bankConfidence) {
+  if (payrollHits >= bankHits) {
     return { type: 'PAYROLL', confidence: payrollConfidence }
   }
 
