@@ -1,15 +1,14 @@
 /**
  * GET /api/dashboard
  *
- * Executive dashboard data for the current month.
- * Returns aggregate payroll costs, reconciliation status breakdown,
- * per-company summaries, 12-month trends, and recent alerts.
+ * Executive dashboard. Each company shows its own latest salary month —
+ * so Company A may show May 2026 while Company B shows April 2026.
+ * KPI cards aggregate across all companies' latest months combined.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
-/** Returns YYYY-MM string for N months ago from today (0 = current month). */
 function monthOffset(n: number): string {
   const d = new Date()
   d.setDate(1)
@@ -19,103 +18,73 @@ function monthOffset(n: number): string {
 
 export async function GET(_request: NextRequest) {
   try {
-    // Use the most recent month that has payroll data; fall back to current month
-    const latestPayroll = await prisma.payrollRecord.findFirst({
-      orderBy: { salaryMonth: 'desc' },
-      select: { salaryMonth: true },
-    })
-    const currentMonth = latestPayroll?.salaryMonth ?? monthOffset(0)
-
     // -------------------------------------------------------------------------
-    // 1. Current-month reconciliation status breakdown
-    // -------------------------------------------------------------------------
-    const currentMonthRecon = await prisma.reconciliationRecord.findMany({
-      where: { salaryMonth: currentMonth },
-      select: {
-        status: true,
-        expectedAmount: true,
-        paidAmount: true,
-      },
-    })
-
-    let totalPayrollCost = 0
-    let paidTotal = 0
-    let unpaidTotal = 0
-    let partialTotal = 0
-    let needsReviewCount = 0
-
-    for (const rec of currentMonthRecon) {
-      const expected = Number(rec.expectedAmount)
-      totalPayrollCost += expected
-
-      switch (rec.status) {
-        case 'PAID':
-        case 'OVERPAID':
-          paidTotal += Number(rec.paidAmount ?? expected)
-          break
-        case 'UNPAID':
-          unpaidTotal += expected
-          break
-        case 'PARTIAL':
-          partialTotal += expected
-          break
-        case 'NEEDS_REVIEW':
-          needsReviewCount++
-          break
-      }
-    }
-
-    // If no reconciliation records for current month, fall back to payroll records
-    if (currentMonthRecon.length === 0) {
-      const payrollAgg = await prisma.payrollRecord.aggregate({
-        where: { salaryMonth: currentMonth },
-        _sum: { auszahlungsbetrag: true },
-      })
-      totalPayrollCost = Number(payrollAgg._sum.auszahlungsbetrag ?? 0)
-      unpaidTotal = totalPayrollCost
-    }
-
-    const riskAmount = unpaidTotal + partialTotal
-
-    // -------------------------------------------------------------------------
-    // 2. Per-company summaries for current month
+    // 1. Find each company's latest salary month independently
     // -------------------------------------------------------------------------
     const companies = await prisma.company.findMany({
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     })
 
-    const companySummaries = await Promise.all(
+    // For each company, find the latest month that has payroll data
+    const companyLatestMonths = await Promise.all(
       companies.map(async (company) => {
-        // Employee count for this company
-        const employeeCount = await prisma.companyEmployee.count({
-          where: { companyId: company.id, active: true },
+        const latest = await prisma.payrollRecord.findFirst({
+          where: { companyId: company.id },
+          orderBy: { salaryMonth: 'desc' },
+          select: { salaryMonth: true },
         })
+        return { company, latestMonth: latest?.salaryMonth ?? null }
+      })
+    )
 
-        // Payroll total for current month
-        const payrollAgg = await prisma.payrollRecord.aggregate({
-          where: { companyId: company.id, salaryMonth: currentMonth },
-          _sum: { auszahlungsbetrag: true },
-          _count: { id: true },
-        })
+    // Only keep companies that have any payroll data
+    const activeCompanyMonths = companyLatestMonths.filter((c) => c.latestMonth !== null)
+
+    // The "headline" month shown in the KPI header = most common latest month
+    // (or the globally latest if all differ)
+    const monthCounts = new Map<string, number>()
+    for (const { latestMonth } of activeCompanyMonths) {
+      if (latestMonth) monthCounts.set(latestMonth, (monthCounts.get(latestMonth) ?? 0) + 1)
+    }
+    const headlineMonth =
+      [...monthCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
+      monthOffset(0)
+
+    // -------------------------------------------------------------------------
+    // 2. Per-company summaries — each uses its own latest month
+    // -------------------------------------------------------------------------
+    const companySummaries = await Promise.all(
+      activeCompanyMonths.map(async ({ company, latestMonth }) => {
+        const month = latestMonth!
+
+        const [employeeCount, payrollAgg, recon] = await Promise.all([
+          prisma.companyEmployee.count({ where: { companyId: company.id, active: true } }),
+          prisma.payrollRecord.aggregate({
+            where: { companyId: company.id, salaryMonth: month },
+            _sum: { auszahlungsbetrag: true },
+            _count: { id: true },
+          }),
+          prisma.reconciliationRecord.groupBy({
+            by: ['status'],
+            where: { companyId: company.id, salaryMonth: month },
+            _count: { id: true },
+          }),
+        ])
 
         const totalCost = Number(payrollAgg._sum.auszahlungsbetrag ?? 0)
-
-        // Reconciliation breakdown for this company and month
-        const recon = await prisma.reconciliationRecord.groupBy({
-          by: ['status'],
-          where: { companyId: company.id, salaryMonth: currentMonth },
-          _count: { id: true },
-        })
-
         const reconMap = Object.fromEntries(recon.map((r) => [r.status, r._count.id]))
         const paidCount = (reconMap['PAID'] ?? 0) + (reconMap['OVERPAID'] ?? 0)
-        const unpaidCount = (reconMap['UNPAID'] ?? 0) + (reconMap['PARTIAL'] ?? 0) + (reconMap['NEEDS_REVIEW'] ?? 0)
+        const unpaidCount =
+          (reconMap['UNPAID'] ?? 0) + (reconMap['PARTIAL'] ?? 0) + (reconMap['NEEDS_REVIEW'] ?? 0)
+        const totalEmployees = payrollAgg._count.id
 
         return {
           companyId: company.id,
           companyName: company.name,
+          salaryMonth: month,
           employeeCount,
+          totalEmployees,
           totalCost,
           paidCount,
           unpaidCount,
@@ -123,11 +92,62 @@ export async function GET(_request: NextRequest) {
       })
     )
 
-    // Filter to companies that actually have payroll data this month
-    const activeCompanySummaries = companySummaries.filter((s) => s.totalCost > 0 || s.paidCount > 0 || s.unpaidCount > 0)
+    // -------------------------------------------------------------------------
+    // 3. KPI totals — aggregate across all companies' latest month data
+    // -------------------------------------------------------------------------
+    // Collect all (companyId, latestMonth) pairs
+    const monthPairs = activeCompanyMonths
+      .filter((c) => c.latestMonth)
+      .map((c) => ({ companyId: c.company.id, salaryMonth: c.latestMonth! }))
+
+    let totalPayrollCost = 0
+    let paidTotal = 0
+    let unpaidTotal = 0
+    let partialTotal = 0
+    let needsReviewCount = 0
+
+    for (const { companyId, salaryMonth } of monthPairs) {
+      const reconRows = await prisma.reconciliationRecord.findMany({
+        where: { companyId, salaryMonth },
+        select: { status: true, expectedAmount: true, paidAmount: true },
+      })
+
+      if (reconRows.length > 0) {
+        for (const rec of reconRows) {
+          const expected = Number(rec.expectedAmount)
+          totalPayrollCost += expected
+          switch (rec.status) {
+            case 'PAID':
+            case 'OVERPAID':
+              paidTotal += Number(rec.paidAmount ?? expected)
+              break
+            case 'UNPAID':
+              unpaidTotal += expected
+              break
+            case 'PARTIAL':
+              partialTotal += expected
+              break
+            case 'NEEDS_REVIEW':
+              needsReviewCount++
+              break
+          }
+        }
+      } else {
+        // No reconciliation yet — count as unpaid
+        const agg = await prisma.payrollRecord.aggregate({
+          where: { companyId, salaryMonth },
+          _sum: { auszahlungsbetrag: true },
+        })
+        const cost = Number(agg._sum.auszahlungsbetrag ?? 0)
+        totalPayrollCost += cost
+        unpaidTotal += cost
+      }
+    }
+
+    const riskAmount = unpaidTotal + partialTotal
 
     // -------------------------------------------------------------------------
-    // 3. Monthly trends – last 12 months
+    // 4. Monthly trends – last 12 months (global, all companies)
     // -------------------------------------------------------------------------
     const months = Array.from({ length: 12 }, (_, i) => monthOffset(11 - i))
 
@@ -143,7 +163,6 @@ export async function GET(_request: NextRequest) {
             _sum: { paidAmount: true },
           }),
         ])
-
         return {
           month,
           totalCost: Number(payrollAgg._sum.auszahlungsbetrag ?? 0),
@@ -153,8 +172,7 @@ export async function GET(_request: NextRequest) {
     )
 
     // -------------------------------------------------------------------------
-    // 4. Recent alerts
-    //    Derive alerts from recent NEEDS_REVIEW / UNPAID records and errors
+    // 5. Recent alerts — pull UNPAID/NEEDS_REVIEW from each company's latest month
     // -------------------------------------------------------------------------
     type Alert = {
       type: string
@@ -165,52 +183,44 @@ export async function GET(_request: NextRequest) {
 
     const recentAlerts: Alert[] = []
 
-    // High-risk: UNPAID records from current month
-    const unpaidRecords = await prisma.reconciliationRecord.findMany({
-      where: { salaryMonth: currentMonth, status: 'UNPAID' },
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        employee: { select: { name: true } },
-      },
-    })
-
-    for (const rec of unpaidRecords) {
-      recentAlerts.push({
-        type: 'UNPAID_SALARY',
-        message: `Salary not paid for ${rec.employee.name} in ${currentMonth} (expected: €${Number(rec.expectedAmount).toFixed(2)})`,
-        severity: 'HIGH',
-        createdAt: rec.createdAt,
+    for (const { companyId, salaryMonth } of monthPairs) {
+      const unpaidRecords = await prisma.reconciliationRecord.findMany({
+        where: { companyId, salaryMonth, status: 'UNPAID' },
+        take: 3,
+        orderBy: { createdAt: 'desc' },
+        include: { employee: { select: { name: true } } },
       })
+      for (const rec of unpaidRecords) {
+        recentAlerts.push({
+          type: 'UNPAID_SALARY',
+          message: `Salary not paid: ${rec.employee.name} — ${salaryMonth} (€${Number(rec.expectedAmount).toFixed(2)})`,
+          severity: 'HIGH',
+          createdAt: rec.createdAt,
+        })
+      }
+
+      const reviewRecords = await prisma.reconciliationRecord.findMany({
+        where: { companyId, salaryMonth, status: 'NEEDS_REVIEW' },
+        take: 3,
+        orderBy: { createdAt: 'desc' },
+        include: { employee: { select: { name: true } } },
+      })
+      for (const rec of reviewRecords) {
+        recentAlerts.push({
+          type: 'NEEDS_REVIEW',
+          message: `Needs review: ${rec.employee.name} — ${salaryMonth}`,
+          severity: 'MEDIUM',
+          createdAt: rec.createdAt,
+        })
+      }
     }
 
-    // Medium: NEEDS_REVIEW records
-    const reviewRecords = await prisma.reconciliationRecord.findMany({
-      where: { salaryMonth: currentMonth, status: 'NEEDS_REVIEW' },
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        employee: { select: { name: true } },
-      },
-    })
-
-    for (const rec of reviewRecords) {
-      recentAlerts.push({
-        type: 'NEEDS_REVIEW',
-        message: `Reconciliation needs review for ${rec.employee.name} in ${currentMonth}`,
-        severity: 'MEDIUM',
-        createdAt: rec.createdAt,
-      })
-    }
-
-    // Low: failed file uploads
     const failedFiles = await prisma.uploadedFile.findMany({
       where: { status: 'ERROR' },
       take: 3,
       orderBy: { uploadedAt: 'desc' },
       select: { originalName: true, errorMessage: true, uploadedAt: true },
     })
-
     for (const f of failedFiles) {
       recentAlerts.push({
         type: 'FILE_ERROR',
@@ -220,7 +230,6 @@ export async function GET(_request: NextRequest) {
       })
     }
 
-    // Sort alerts by severity then date
     const severityOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 }
     recentAlerts.sort((a, b) => {
       const sevDiff = severityOrder[a.severity] - severityOrder[b.severity]
@@ -228,18 +237,15 @@ export async function GET(_request: NextRequest) {
       return b.createdAt.getTime() - a.createdAt.getTime()
     })
 
-    // -------------------------------------------------------------------------
-    // Response
-    // -------------------------------------------------------------------------
     return NextResponse.json({
-      currentMonth,
+      currentMonth: headlineMonth,
       totalPayrollCost,
       paidTotal,
       unpaidTotal,
       partialTotal,
       needsReviewCount,
       riskAmount,
-      companySummaries: activeCompanySummaries,
+      companySummaries,
       monthlyTrends,
       recentAlerts: recentAlerts.slice(0, 20),
     })

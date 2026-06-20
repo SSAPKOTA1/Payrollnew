@@ -10,7 +10,9 @@ const fmt = (n: number) =>
 interface CompanySummary {
   companyId: string
   companyName: string
+  salaryMonth: string
   employeeCount: number
+  totalEmployees: number
   totalCost: number
   paidCount: number
   unpaidCount: number
@@ -284,7 +286,7 @@ export default function DashboardPage() {
             <div className="xl:col-span-2 bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
                 <h2 className="font-semibold text-white">Company Breakdown</h2>
-                <span className="text-xs text-gray-500">{data.currentMonth}</span>
+                <span className="text-xs text-gray-500">latest month per company</span>
               </div>
               {data.companySummaries.length === 0 ? (
                 <div className="px-5 py-10 text-center text-gray-500 text-sm">No company data for this month</div>
@@ -294,6 +296,7 @@ export default function DashboardPage() {
                     <thead>
                       <tr className="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
                         <th className="text-left px-5 py-3">Company</th>
+                        <th className="text-left px-5 py-3">Month</th>
                         <th className="text-right px-5 py-3">Employees</th>
                         <th className="text-right px-5 py-3">Total Cost</th>
                         <th className="text-right px-5 py-3">Paid</th>
@@ -304,7 +307,12 @@ export default function DashboardPage() {
                       {data.companySummaries.map((c) => (
                         <tr key={c.companyId} className="hover:bg-gray-800/50 transition-colors">
                           <td className="px-5 py-3 font-medium text-white">{c.companyName}</td>
-                          <td className="px-5 py-3 text-right text-gray-300">{c.employeeCount}</td>
+                          <td className="px-5 py-3">
+                            <span className="text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded px-2 py-0.5 font-mono">
+                              {c.salaryMonth}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-right text-gray-300">{c.totalEmployees}</td>
                           <td className="px-5 py-3 text-right text-gray-300">{fmt(c.totalCost)}</td>
                           <td className="px-5 py-3 text-right">
                             <span className="text-green-400">{c.paidCount}</span>
