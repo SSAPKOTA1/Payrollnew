@@ -33,6 +33,7 @@ interface Alert {
 
 interface DashboardData {
   currentMonth: string
+  availableMonths: string[]
   totalPayrollCost: number
   paidTotal: number
   unpaidTotal: number
@@ -144,19 +145,39 @@ function AlertSeverityBadge({ severity }: { severity: 'HIGH' | 'MEDIUM' | 'LOW' 
   )
 }
 
+function formatMonth(ym: string): string {
+  const [year, month] = ym.split('-')
+  const date = new Date(Number(year), Number(month) - 1, 1)
+  return date.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   const [runMsg, setRunMsg] = useState<string | null>(null)
+  const [selectedMonth, setSelectedMonth] = useState<string>('')
 
-  useEffect(() => {
-    fetch('/api/dashboard')
+  const loadDashboard = (month: string) => {
+    setLoading(true)
+    const url = month ? `/api/dashboard?month=${month}` : '/api/dashboard'
+    fetch(url)
       .then((r) => r.json())
-      .then(setData)
+      .then((d) => {
+        setData(d)
+        // Set default selected month on first load
+        if (!month && d.currentMonth) setSelectedMonth(d.currentMonth)
+      })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { loadDashboard('') }, [])
+
+  const handleMonthChange = (month: string) => {
+    setSelectedMonth(month)
+    loadDashboard(month)
+  }
 
   const handleRunReconciliation = async () => {
     setRunning(true)
@@ -188,6 +209,20 @@ export default function DashboardPage() {
           <p className="text-sm text-gray-400 mt-0.5">{today}</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Month picker */}
+          {data && data.availableMonths.length > 0 && (
+            <select
+              value={selectedMonth}
+              onChange={(e) => handleMonthChange(e.target.value)}
+              className="bg-gray-900 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50"
+            >
+              {data.availableMonths.map((m) => (
+                <option key={m} value={m}>
+                  {formatMonth(m)}{m === data.availableMonths[0] ? ' (latest)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
           {runMsg && (
             <span className="text-sm text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-1.5">
               {runMsg}

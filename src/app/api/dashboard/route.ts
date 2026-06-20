@@ -16,38 +16,59 @@ function monthOffset(n: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url)
+    const selectedMonth = searchParams.get('month') ?? null
+
     // -------------------------------------------------------------------------
-    // 1. Find each company's latest salary month independently
+    // 0. Collect all available months (for the month picker dropdown)
+    // -------------------------------------------------------------------------
+    const allMonthRows = await prisma.payrollRecord.findMany({
+      select: { salaryMonth: true },
+      distinct: ['salaryMonth'],
+      orderBy: { salaryMonth: 'desc' },
+    })
+    const availableMonths = allMonthRows.map((r) => r.salaryMonth)
+
+    // -------------------------------------------------------------------------
+    // 1. Determine which month to show per company
+    //    - If user selected a month: use that month for all companies
+    //    - Otherwise: each company uses its own latest month
     // -------------------------------------------------------------------------
     const companies = await prisma.company.findMany({
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     })
 
-    // For each company, find the latest month that has payroll data
     const companyLatestMonths = await Promise.all(
       companies.map(async (company) => {
-        const latest = await prisma.payrollRecord.findFirst({
-          where: { companyId: company.id },
-          orderBy: { salaryMonth: 'desc' },
-          select: { salaryMonth: true },
-        })
-        return { company, latestMonth: latest?.salaryMonth ?? null }
+        if (selectedMonth) {
+          // Only include company if it has data for the selected month
+          const exists = await prisma.payrollRecord.findFirst({
+            where: { companyId: company.id, salaryMonth: selectedMonth },
+            select: { salaryMonth: true },
+          })
+          return { company, latestMonth: exists ? selectedMonth : null }
+        } else {
+          const latest = await prisma.payrollRecord.findFirst({
+            where: { companyId: company.id },
+            orderBy: { salaryMonth: 'desc' },
+            select: { salaryMonth: true },
+          })
+          return { company, latestMonth: latest?.salaryMonth ?? null }
+        }
       })
     )
 
-    // Only keep companies that have any payroll data
     const activeCompanyMonths = companyLatestMonths.filter((c) => c.latestMonth !== null)
 
-    // The "headline" month shown in the KPI header = most common latest month
-    // (or the globally latest if all differ)
     const monthCounts = new Map<string, number>()
     for (const { latestMonth } of activeCompanyMonths) {
       if (latestMonth) monthCounts.set(latestMonth, (monthCounts.get(latestMonth) ?? 0) + 1)
     }
     const headlineMonth =
+      selectedMonth ??
       [...monthCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
       monthOffset(0)
 
@@ -239,6 +260,7 @@ export async function GET(_request: NextRequest) {
 
     return NextResponse.json({
       currentMonth: headlineMonth,
+      availableMonths,
       totalPayrollCost,
       paidTotal,
       unpaidTotal,
