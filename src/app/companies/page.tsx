@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 
 const fmt = (n: number) =>
@@ -122,6 +123,7 @@ function AddCompanyModal({ onClose, onAdded }: AddModalProps) {
 }
 
 export default function CompaniesPage() {
+  const router = useRouter()
   const [companies, setCompanies] = useState<Company[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -199,7 +201,8 @@ export default function CompaniesPage() {
           {filtered.map((c) => (
             <div
               key={c.id}
-              className="bg-gray-900 border border-gray-800 hover:border-gray-700 rounded-xl p-5 flex flex-col gap-4 transition-colors"
+              onClick={() => router.push(`/companies/${c.id}`)}
+              className="bg-gray-900 border border-gray-800 hover:border-blue-600/50 rounded-xl p-5 flex flex-col gap-4 transition-colors cursor-pointer"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
