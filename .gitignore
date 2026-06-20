@@ -24,3 +24,4 @@ agent/.payrollsync-state.json
 # Misc
 .DS_Store
 *.log
+tsconfig.tsbuildinfo
