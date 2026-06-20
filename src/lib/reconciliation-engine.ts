@@ -65,31 +65,6 @@ type BankTransaction = {
 }
 
 // ---------------------------------------------------------------------------
-// Salary keyword detection
-// ---------------------------------------------------------------------------
-
-const SALARY_KEYWORDS = [
-  // German
-  'gehalt', 'lohn', 'lohnauszahlung', 'gehaltsauszahlung', 'verguetung', 'vergütung',
-  'arbeitsentgelt', 'entgelt', 'honorar', 'auszahlung', 'nettolohn', 'nettogehalt',
-  'monatslohn', 'monatsgehalt',
-  // Abbreviations common in bank purpose lines
-  'geh.', 'lohn.', 'geh/', 'lohn/',
-  // English
-  'salary', 'wage', 'wages', 'payroll', 'pay ', 'monthly pay',
-]
-
-/**
- * Returns true if the purpose text contains a salary-related keyword.
- * A transaction with no purpose passes through (we can't rule it out).
- */
-function isSalaryTransaction(purpose: string | null | undefined): boolean {
-  if (!purpose) return true // no purpose → don't exclude
-  const lower = purpose.toLowerCase()
-  return SALARY_KEYWORDS.some((kw) => lower.includes(kw))
-}
-
-// ---------------------------------------------------------------------------
 // Scoring helpers
 // ---------------------------------------------------------------------------
 
@@ -262,8 +237,8 @@ export async function runReconciliation(
   // 2. Load bank transactions (±2 months around the salary month)
   // -------------------------------------------------------------------------
   const [year, month] = salaryMonth.split('-').map(Number)
-  const windowStart = new Date(year, month - 2, 1)
-  const windowEnd = new Date(year, month + 1, 31)
+  const windowStart = new Date(year, month - 3, 1)  // 3 months before
+  const windowEnd = new Date(year, month + 2, 31)    // 2 months after
 
   // Salary payments leave the company account as debits (negative amounts).
   // Also accept positive amounts as a fallback (some export formats invert sign).
@@ -275,10 +250,11 @@ export async function runReconciliation(
     },
   }) as unknown as BankTransaction[]
 
-  // Normalise to positive amounts and filter to salary-related transactions only.
+  // Normalise to positive amounts. No keyword filter — rely on scoring instead,
+  // since salary transfers often have only the employee name in the purpose field
+  // without any salary keyword.
   const transactions: BankTransaction[] = rawTransactions
     .map((tx) => ({ ...tx, amount: Math.abs(tx.amount) }))
-    .filter((tx) => isSalaryTransaction(tx.purpose))
 
   // -------------------------------------------------------------------------
   // 3. Score all payroll x transaction combinations
