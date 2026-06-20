@@ -241,13 +241,21 @@ export async function runReconciliation(
   const windowStart = new Date(year, month - 2, 1)
   const windowEnd = new Date(year, month + 1, 31)
 
-  const transactions = await prisma.bankTransaction.findMany({
+  // Salary payments leave the company account as debits (negative amounts).
+  // Also accept positive amounts as a fallback (some export formats invert sign).
+  const rawTransactions = await prisma.bankTransaction.findMany({
     where: {
       companyId,
       bookingDate: { gte: windowStart, lte: windowEnd },
-      amount: { gt: 0 },
+      amount: { not: 0 },
     },
   }) as unknown as BankTransaction[]
+
+  // Normalise to positive amounts so scoring works uniformly.
+  // Filter out large incoming transfers (credits that are far larger than any
+  // plausible individual salary — they are revenue, not payroll).
+  const transactions: BankTransaction[] = rawTransactions
+    .map((tx) => ({ ...tx, amount: Math.abs(tx.amount) }))
 
   // -------------------------------------------------------------------------
   // 3. Score all payroll x transaction combinations
