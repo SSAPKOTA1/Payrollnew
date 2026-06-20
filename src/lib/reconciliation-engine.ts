@@ -1,11 +1,6 @@
-/**
- * reconciliation-engine.ts
- * Core payroll reconciliation logic: matches payroll records against bank
- * transactions and persists the results.
- */
-
 import { prisma } from './prisma'
 import { exactNameMatch, fuzzyMatchName, matchIban } from './fuzzy-matcher'
+import { inferSalaryMonth } from './temporal-inference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,7 +56,7 @@ type PayrollRow = {
 type BankTransaction = {
   id: string
   companyId: string
-  salaryMonth?: string | null
+  inferredMonth?: string | null
   counterpartyName?: string | null
   counterpartyIban?: string | null
   amount: number
@@ -70,26 +65,45 @@ type BankTransaction = {
 }
 
 // ---------------------------------------------------------------------------
+// Salary keyword detection
+// ---------------------------------------------------------------------------
+
+const SALARY_KEYWORDS = [
+  // German
+  'gehalt', 'lohn', 'lohnauszahlung', 'gehaltsauszahlung', 'verguetung', 'vergütung',
+  'arbeitsentgelt', 'entgelt', 'honorar', 'auszahlung', 'nettolohn', 'nettogehalt',
+  'monatslohn', 'monatsgehalt',
+  // Abbreviations common in bank purpose lines
+  'geh.', 'lohn.', 'geh/', 'lohn/',
+  // English
+  'salary', 'wage', 'wages', 'payroll', 'pay ', 'monthly pay',
+]
+
+/**
+ * Returns true if the purpose text contains a salary-related keyword.
+ * A transaction with no purpose passes through (we can't rule it out).
+ */
+function isSalaryTransaction(purpose: string | null | undefined): boolean {
+  if (!purpose) return true // no purpose → don't exclude
+  const lower = purpose.toLowerCase()
+  return SALARY_KEYWORDS.some((kw) => lower.includes(kw))
+}
+
+// ---------------------------------------------------------------------------
 // Scoring helpers
 // ---------------------------------------------------------------------------
 
-// Exact name match is the primary signal (no IBAN data in typical payroll files)
-const WEIGHT_IBAN   = 90
-const WEIGHT_NAME   = 80   // raised — exact name match is very reliable
-const WEIGHT_AMOUNT = 30
-const WEIGHT_DATE   = 20
-const MAX_SCORE = WEIGHT_IBAN + WEIGHT_NAME + WEIGHT_AMOUNT + WEIGHT_DATE
+const WEIGHT_IBAN    = 90
+const WEIGHT_NAME    = 80
+const WEIGHT_MONTH   = 40  // month extracted from purpose is a strong signal
+const WEIGHT_AMOUNT  = 30
+const WEIGHT_DATE    = 10  // date proximity is weaker when month is known
+const MAX_SCORE = WEIGHT_IBAN + WEIGHT_NAME + WEIGHT_MONTH + WEIGHT_AMOUNT + WEIGHT_DATE
 
-/**
- * Determine how many days apart two dates are.
- */
 function daysDiff(a: Date, b: Date): number {
   return Math.abs((a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-/**
- * Parse "YYYY-MM" into a Date pointing to the first of that month.
- */
 function salaryMonthToDate(salaryMonth: string): Date {
   const [year, month] = salaryMonth.split('-').map(Number)
   return new Date(year, month - 1, 1)
@@ -107,7 +121,7 @@ interface ScoreResult {
 function scoreMatch(
   payroll: PayrollRow,
   tx: BankTransaction,
-  salaryMonthDate: Date
+  salaryMonth: string
 ): ScoreResult {
   let score = 0
   const notes: string[] = []
@@ -121,46 +135,56 @@ function scoreMatch(
   }
 
   // --- Name match (80 pts) ---
-  // Exact match: all name tokens must be present in both names (order-insensitive).
-  // e.g. "Aryal, Ramesh" matches "Ramesh Aryal" but NOT "R. Aryal".
+  // Exact token match first (order-insensitive: "Aryal, Ramesh" == "Ramesh Aryal").
+  // Fall back to fuzzy similarity ≥70% for minor typos or abbreviated first names.
   if (payroll.employeeName && tx.counterpartyName) {
     if (exactNameMatch(payroll.employeeName, tx.counterpartyName)) {
       score += WEIGHT_NAME
       notes.push('Name matched exactly')
     } else {
-      // Partial credit only for high fuzzy similarity (≥85%) — catches minor typos in bank data
       const nameSimilarity = fuzzyMatchName(payroll.employeeName, tx.counterpartyName)
-      if (nameSimilarity >= 85) {
-        const nameScore = Math.round((nameSimilarity / 100) * WEIGHT_NAME * 0.6)
+      if (nameSimilarity >= 70) {
+        const nameScore = Math.round((nameSimilarity / 100) * WEIGHT_NAME * 0.75)
         score += nameScore
-        notes.push(`Name close match: ${nameSimilarity}%`)
+        notes.push(`Name fuzzy match: ${nameSimilarity}%`)
       }
     }
   }
 
+  // --- Month match from purpose (40 pts) ---
+  // inferredMonth is pre-computed from the purpose text when the transaction
+  // was stored. An exact month match is a strong signal.
+  const txMonth = tx.inferredMonth
+    ?? (tx.purpose ? inferSalaryMonth(tx.purpose, tx.bookingDate) : null)
+  if (txMonth) {
+    if (txMonth === salaryMonth) {
+      score += WEIGHT_MONTH
+      notes.push(`Month matched in purpose: ${txMonth}`)
+    } else {
+      notes.push(`Purpose month mismatch: ${txMonth} vs ${salaryMonth}`)
+    }
+  }
+
   // --- Amount match (30 pts) ---
-  const amountTolerance = payroll.netSalary * 0.01 // 1% tolerance
+  const amountTolerance = payroll.netSalary * 0.01
   const amountDiff = Math.abs(tx.amount - payroll.netSalary)
   if (amountDiff <= amountTolerance) {
     score += WEIGHT_AMOUNT
     notes.push('Amount matched within 1%')
   } else if (amountDiff <= payroll.netSalary * 0.05) {
-    // Partial credit for close amounts (within 5%)
-    const partialAmountScore = Math.round(
-      WEIGHT_AMOUNT * (1 - amountDiff / payroll.netSalary)
-    )
+    const partialAmountScore = Math.round(WEIGHT_AMOUNT * (1 - amountDiff / payroll.netSalary))
     score += partialAmountScore
     notes.push(`Amount close: diff=${amountDiff.toFixed(2)}`)
   }
 
-  // --- Date proximity (20 pts) ---
+  // --- Date proximity (10 pts) ---
   // Salary is typically paid in the month of or shortly after the salary month.
-  // We give full points if within 45 days.
+  const salaryMonthDate = salaryMonthToDate(salaryMonth)
   const days = daysDiff(tx.bookingDate, salaryMonthDate)
-  if (days <= 45) {
-    const dateScore = Math.round(WEIGHT_DATE * (1 - days / 45))
+  if (days <= 60) {
+    const dateScore = Math.round(WEIGHT_DATE * (1 - days / 60))
     score += dateScore
-    notes.push(`Date proximity: ${Math.round(days)} days from salary month`)
+    notes.push(`Date proximity: ${Math.round(days)} days`)
   }
 
   return { score, notes }
@@ -251,23 +275,21 @@ export async function runReconciliation(
     },
   }) as unknown as BankTransaction[]
 
-  // Normalise to positive amounts so scoring works uniformly.
-  // Filter out large incoming transfers (credits that are far larger than any
-  // plausible individual salary — they are revenue, not payroll).
+  // Normalise to positive amounts and filter to salary-related transactions only.
   const transactions: BankTransaction[] = rawTransactions
     .map((tx) => ({ ...tx, amount: Math.abs(tx.amount) }))
+    .filter((tx) => isSalaryTransaction(tx.purpose))
 
   // -------------------------------------------------------------------------
   // 3. Score all payroll x transaction combinations
   // -------------------------------------------------------------------------
-  const salaryMonthDate = salaryMonthToDate(salaryMonth)
 
   // Build score matrix: payrollIdx -> { txIdx, score, notes }[]
   type Candidate = { txIdx: number; score: number; notes: string[] }
   const scoreMatrix: Candidate[][] = payrollRows.map((payroll) =>
     transactions
       .map((tx, txIdx) => {
-        const { score, notes } = scoreMatch(payroll, tx, salaryMonthDate)
+        const { score, notes } = scoreMatch(payroll, tx, salaryMonth)
         return { txIdx, score, notes }
       })
       .sort((a, b) => b.score - a.score)
