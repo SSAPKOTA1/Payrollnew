@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { exactNameMatch, fuzzyMatchName, matchIban } from './fuzzy-matcher'
-import { inferSalaryMonth } from './temporal-inference'
+import { extractSalaryMonthFromPurpose, inferSalaryMonth } from './temporal-inference'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,7 +40,7 @@ export type ReconciliationResult = {
 }
 
 // ---------------------------------------------------------------------------
-// Internal types for DB rows (typed loosely — adapt to your Prisma schema)
+// Internal types for DB rows
 // ---------------------------------------------------------------------------
 
 type PayrollRow = {
@@ -65,14 +65,19 @@ type BankTransaction = {
 }
 
 // ---------------------------------------------------------------------------
-// Scoring helpers
+// Scoring weights
+//
+// Max possible score = 90 + 80 + 50 + 30 + 10 = 260
+// A confident salary match (name exact + month in purpose + amount within 1%)
+// scores 80 + 50 + 30 = 160 / 260 = 62% → NEEDS_REVIEW border.
+// Add IBAN or date and it crosses 70% → PAID.
 // ---------------------------------------------------------------------------
 
-const WEIGHT_IBAN    = 90
-const WEIGHT_NAME    = 80
-const WEIGHT_MONTH   = 40  // month extracted from purpose is a strong signal
-const WEIGHT_AMOUNT  = 30
-const WEIGHT_DATE    = 10  // date proximity is weaker when month is known
+const WEIGHT_IBAN   = 90   // IBAN is definitive
+const WEIGHT_NAME   = 80   // exact name token match
+const WEIGHT_MONTH  = 50   // month explicitly found in purpose text (not fallback)
+const WEIGHT_AMOUNT = 30   // amount within 1%
+const WEIGHT_DATE   = 10   // date proximity (weak signal on its own)
 const MAX_SCORE = WEIGHT_IBAN + WEIGHT_NAME + WEIGHT_MONTH + WEIGHT_AMOUNT + WEIGHT_DATE
 
 function daysDiff(a: Date, b: Date): number {
@@ -126,17 +131,24 @@ function scoreMatch(
     }
   }
 
-  // --- Month match from purpose (40 pts) ---
-  // inferredMonth is pre-computed from the purpose text when the transaction
-  // was stored. An exact month match is a strong signal.
-  const txMonth = tx.inferredMonth
-    ?? (tx.purpose ? inferSalaryMonth(tx.purpose, tx.bookingDate) : null)
+  // --- Month match from purpose text (50 pts) ---
+  // Use extractSalaryMonthFromPurpose — explicit text extraction only, no
+  // booking-date fallback — so we only score when the purpose actually says
+  // which month this payment is for (e.g. "Gehalt Mai 2026", "05/2026", etc.)
+  const txMonthFromPurpose = tx.purpose
+    ? extractSalaryMonthFromPurpose(tx.purpose)
+    : null
+  // Also check the pre-stored inferredMonth (set when the bank file was uploaded)
+  const txMonth = txMonthFromPurpose ?? tx.inferredMonth ?? null
   if (txMonth) {
     if (txMonth === salaryMonth) {
       score += WEIGHT_MONTH
-      notes.push(`Month matched in purpose: ${txMonth}`)
-    } else {
-      notes.push(`Purpose month mismatch: ${txMonth} vs ${salaryMonth}`)
+      notes.push(`Salary month in purpose: ${txMonth}`)
+    }
+    // If month is explicit but wrong, this is a strong DISQUALIFIER — skip match
+    else if (txMonthFromPurpose) {
+      // Return score 0 immediately: this payment is for a different month
+      return { score: 0, notes: [`Month mismatch: purpose says ${txMonth}, expected ${salaryMonth}`] }
     }
   }
 
