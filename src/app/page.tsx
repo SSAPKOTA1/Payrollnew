@@ -183,11 +183,18 @@ export default function DashboardPage() {
     setRunning(true)
     setRunMsg(null)
     try {
-      const res = await fetch('/api/reconciliation/run', { method: 'POST' })
+      const res = await fetch('/api/reconciliation/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
       const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Failed')
       setRunMsg(json.message ?? 'Reconciliation complete')
-    } catch {
-      setRunMsg('Failed to run reconciliation')
+      // Reload dashboard so KPIs update immediately
+      loadDashboard(selectedMonth)
+    } catch (e: any) {
+      setRunMsg(e.message ?? 'Failed to run reconciliation')
     } finally {
       setRunning(false)
     }

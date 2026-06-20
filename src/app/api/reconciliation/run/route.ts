@@ -14,7 +14,7 @@ import { runReconciliation } from '@/lib/reconciliation-engine'
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    const body = await request.json().catch(() => ({}))
     const { companyId, salaryMonth } = body as {
       companyId?: string
       salaryMonth?: string
@@ -81,7 +81,10 @@ export async function POST(request: NextRequest) {
       companyResults: results,
     }
 
-    return NextResponse.json(aggregate)
+    return NextResponse.json({
+      ...aggregate,
+      message: `Reconciled ${aggregate.totalEmployees} employees across ${aggregate.companiesProcessed} company/month pairs — ${aggregate.matched} paid, ${aggregate.unpaid} unpaid`,
+    })
   } catch (error) {
     console.error('[reconciliation/run] POST error:', error)
     return NextResponse.json(
