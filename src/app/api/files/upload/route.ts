@@ -27,8 +27,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Detect file type
-    const text = content.toString('latin1')
-    const { headers, rows } = parseCSV(text)
+    const { headers, rows, metadataLines } = parseCSV(content)
     const { type: detectedType } = detectFileType(headers, rows)
     const fileType = (fileTypeOverride as any) || detectedType
     const columnMappings = detectColumnMappings(headers, rows)
@@ -40,7 +39,7 @@ export async function POST(req: NextRequest) {
         filePath: filePath || undefined,
         fileHash,
         fileType,
-        detectedSchema: { headers } as any,
+        detectedSchema: { headers, metadataLines } as any,
         columnMappings: columnMappings as any,
         status: 'PROCESSING',
         companyId: companyId || undefined,

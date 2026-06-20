@@ -11,35 +11,59 @@
 /**
  * Parse a German-formatted number string into a JavaScript number.
  *
- * German format uses period as thousands separator and comma as decimal separator:
- *   "1.234,56" -> 1234.56
- *   "1234,56"  -> 1234.56
- *   "-234,56"  -> -234.56
- *   "1234.56"  -> 1234.56 (already standard format — also accepted)
+ * Handles all real-world payroll edge cases:
+ *   "2.550,00"   -> 2550.00    (standard German format)
+ *   "1234,56"    -> 1234.56    (no thousands separator)
+ *   "-234,56"    -> -234.56    (leading minus)
+ *   "885,00-"    -> -885.00    (trailing minus — German accounting format)
+ *   "Z   58,71"  -> 58.71      (leading letter prefix, e.g. "Zuschuss")
+ *   "1234.56"    -> 1234.56    (already standard format — also accepted)
  *
  * Returns null if the string cannot be parsed as a number.
  */
 export function parseGermanNumber(value: string): number | null {
   if (!value || typeof value !== 'string') return null
 
-  const trimmed = value.trim().replace(/\s/g, '')
+  let trimmed = value.trim()
   if (trimmed === '' || trimmed === '-' || trimmed === '+') return null
 
-  // Detect German format: has comma as decimal separator
-  // Pattern: optional sign, digits, optional (dot+3digits)*, comma, digits
-  const germanPattern = /^[+-]?\d{1,3}(?:\.\d{3})*,\d+$/
-  const germanNoThousands = /^[+-]?\d+,\d+$/
+  // Remove internal whitespace
+  trimmed = trimmed.replace(/\s+/g, '')
 
-  if (germanPattern.test(trimmed) || germanNoThousands.test(trimmed)) {
-    // Remove thousands separators (dots) and replace comma with dot
-    const normalized = trimmed.replace(/\./g, '').replace(',', '.')
-    const num = parseFloat(normalized)
-    return isNaN(num) ? null : num
+  // Detect trailing minus (German accounting negative): "885,00-" → "-885,00"
+  let trailingMinus = false
+  if (trimmed.endsWith('-')) {
+    trailingMinus = true
+    trimmed = trimmed.slice(0, -1)
   }
 
-  // Try standard format (dot as decimal separator)
-  const num = parseFloat(trimmed)
-  return isNaN(num) ? null : num
+  // Strip any leading non-numeric prefix characters (e.g. "Z" in "Z58,71")
+  // Keep: digits, plus, minus, dot, comma
+  trimmed = trimmed.replace(/^[^0-9+\-.,]+/, '')
+
+  if (trimmed === '') return null
+
+  let num: number
+
+  // German format: comma as decimal separator
+  // Matches: optional sign, digits, optional (dot+3digits)*, comma, digits
+  const germanPattern = /^[+-]?\d{1,3}(?:\.\d{3})*,\d+$/
+  const germanNoThousands = /^[+-]?\d+,\d+$/
+  // Integer with thousands dots: "1.234" — only if no comma follows
+  const germanInteger = /^[+-]?\d{1,3}(?:\.\d{3})+$/
+
+  if (germanPattern.test(trimmed) || germanNoThousands.test(trimmed)) {
+    const normalized = trimmed.replace(/\./g, '').replace(',', '.')
+    num = parseFloat(normalized)
+  } else if (germanInteger.test(trimmed)) {
+    // "1.234" treated as 1234, not 1.234
+    num = parseFloat(trimmed.replace(/\./g, ''))
+  } else {
+    num = parseFloat(trimmed)
+  }
+
+  if (isNaN(num)) return null
+  return trailingMinus ? -Math.abs(num) : num
 }
 
 // ---------------------------------------------------------------------------
@@ -67,18 +91,13 @@ export function parseGermanDate(value: string): Date | null {
   const month = parseInt(match[2], 10)
   let year = parseInt(match[3], 10)
 
-  // 2-digit year: treat as 2000+
-  if (year < 100) {
-    year += 2000
-  }
+  if (year < 100) year += 2000
 
-  // Basic range validation
   if (month < 1 || month > 12) return null
   if (day < 1 || day > 31) return null
 
   const date = new Date(year, month - 1, day)
 
-  // Verify the date is valid (e.g., not Feb 30)
   if (
     date.getFullYear() !== year ||
     date.getMonth() !== month - 1 ||
@@ -95,35 +114,18 @@ export function parseGermanDate(value: string): Date | null {
 // ---------------------------------------------------------------------------
 
 const GERMAN_MONTHS: Record<string, number> = {
-  januar: 1,
-  jan: 1,
-  februar: 2,
-  feb: 2,
-  maerz: 3,
-  märz: 3,
-  mar: 3,
-  mär: 3,
-  april: 4,
-  apr: 4,
-  mai: 5,
-  may: 5,
-  juni: 6,
-  jun: 6,
-  juli: 7,
-  jul: 7,
-  august: 8,
-  aug: 8,
-  september: 9,
-  sep: 9,
-  sept: 9,
-  oktober: 10,
-  okt: 10,
-  oct: 10,
-  november: 11,
-  nov: 11,
-  dezember: 12,
-  dez: 12,
-  dec: 12,
+  januar: 1, jan: 1,
+  februar: 2, feb: 2,
+  maerz: 3, märz: 3, mar: 3, mär: 3,
+  april: 4, apr: 4,
+  mai: 5, may: 5,
+  juni: 6, jun: 6,
+  juli: 7, jul: 7,
+  august: 8, aug: 8,
+  september: 9, sep: 9, sept: 9,
+  oktober: 10, okt: 10, oct: 10,
+  november: 11, nov: 11,
+  dezember: 12, dez: 12, dec: 12,
 }
 
 function zeroPad(n: number): string {
@@ -132,17 +134,7 @@ function zeroPad(n: number): string {
 
 /**
  * Extract a salary month from a text string.
- *
- * Recognized patterns (in priority order):
- *   1. ISO: "2026-05"
- *   2. Numeric with slash: "05/2026"
- *   3. Numeric with dot: "05.2026"
- *   4. German month name + year: "Mai 2026", "Januar 2025"
- *
  * Returns YYYY-MM string or null.
- *
- * If no pattern is found and fallbackDate is provided, returns one month before
- * fallbackDate as the salary month.
  */
 export function extractSalaryMonth(
   text: string,
@@ -156,9 +148,7 @@ export function extractSalaryMonth(
     if (isoMatch) {
       const year = parseInt(isoMatch[1], 10)
       const month = parseInt(isoMatch[2], 10)
-      if (month >= 1 && month <= 12) {
-        return `${year}-${zeroPad(month)}`
-      }
+      if (month >= 1 && month <= 12) return `${year}-${zeroPad(month)}`
     }
 
     // 2. MM/YYYY
@@ -166,22 +156,18 @@ export function extractSalaryMonth(
     if (slashMatch) {
       const month = parseInt(slashMatch[1], 10)
       const year = parseInt(slashMatch[2], 10)
-      if (month >= 1 && month <= 12) {
-        return `${year}-${zeroPad(month)}`
-      }
+      if (month >= 1 && month <= 12) return `${year}-${zeroPad(month)}`
     }
 
-    // 3. MM.YYYY (but not DD.MM.YYYY — require start of string or non-digit before)
+    // 3. MM.YYYY (but not DD.MM.YYYY)
     const dotMatch = t.match(/(?<!\d\.)(\b\d{1,2})\.(\d{4})\b/)
     if (dotMatch) {
       const month = parseInt(dotMatch[1], 10)
       const year = parseInt(dotMatch[2], 10)
-      if (month >= 1 && month <= 12) {
-        return `${year}-${zeroPad(month)}`
-      }
+      if (month >= 1 && month <= 12) return `${year}-${zeroPad(month)}`
     }
 
-    // 4. German month name + year
+    // 4. German/English month name + year (e.g. "Mai 2026", "Januar 2025")
     const lower = t.toLowerCase()
     for (const [monthName, monthNum] of Object.entries(GERMAN_MONTHS)) {
       const regex = new RegExp(`\\b${monthName}\\b[\\s.,/-]*(\\d{4})`, 'i')
@@ -208,17 +194,27 @@ export function extractSalaryMonth(
 // CSV parser
 // ---------------------------------------------------------------------------
 
+// Keywords that indicate a row is a real header row (not metadata)
+const PAYROLL_HEADER_KEYWORDS = [
+  'pers.-nr.', 'personalnummer', 'pers.nr', 'pers-nr',
+  'auszahlungsbetrag', 'gesamt-brutto', 'lohnsteuer',
+  'kv-brutto', 'rv-brutto', 'kv-beitrag', 'rv-beitrag',
+]
+
+const BANK_HEADER_KEYWORDS = [
+  'auftragskonto', 'buchungstag', 'valutadatum',
+  'verwendungszweck', 'beguenstigter', 'betrag', 'waehrung',
+]
+
 /**
  * Detect the delimiter used in a CSV file.
- * Returns ';' or ',' based on frequency in the first few lines.
  */
 function detectDelimiter(lines: string[]): ';' | ',' {
-  const sampleLines = lines.slice(0, Math.min(5, lines.length))
+  const sampleLines = lines.slice(0, Math.min(10, lines.length))
   let semicolons = 0
   let commas = 0
 
   for (const line of sampleLines) {
-    // Count outside quoted regions
     let inQuote = false
     for (let i = 0; i < line.length; i++) {
       const ch = line[i]
@@ -247,7 +243,6 @@ function parseCsvLine(line: string, delimiter: string): string[] {
 
     if (inQuote) {
       if (ch === '"') {
-        // Check for escaped quote ("")
         if (i + 1 < line.length && line[i + 1] === '"') {
           current += '"'
           i += 2
@@ -264,19 +259,8 @@ function parseCsvLine(line: string, delimiter: string): string[] {
       }
     }
 
-    if (ch === '"') {
-      inQuote = true
-      i++
-      continue
-    }
-
-    if (ch === delimiter) {
-      fields.push(current)
-      current = ''
-      i++
-      continue
-    }
-
+    if (ch === '"') { inQuote = true; i++; continue }
+    if (ch === delimiter) { fields.push(current); current = ''; i++; continue }
     current += ch
     i++
   }
@@ -286,27 +270,57 @@ function parseCsvLine(line: string, delimiter: string): string[] {
 }
 
 /**
+ * Score how likely a parsed row is to be a header row.
+ * Returns a score 0–100.
+ */
+function headerScore(fields: string[]): number {
+  const lower = fields.map(f => f.toLowerCase().trim())
+  const allText = lower.join(' ')
+  let score = 0
+
+  for (const kw of PAYROLL_HEADER_KEYWORDS) {
+    if (allText.includes(kw)) score += 15
+  }
+  for (const kw of BANK_HEADER_KEYWORDS) {
+    if (allText.includes(kw)) score += 15
+  }
+
+  // Penalise rows that look like data (mostly numbers or empty)
+  const nonEmpty = fields.filter(f => f.trim() !== '')
+  const numericCount = nonEmpty.filter(f => /^[0-9.,Z\s\-+]+$/.test(f.trim())).length
+  if (nonEmpty.length > 0 && numericCount / nonEmpty.length > 0.6) score -= 30
+
+  return Math.max(0, score)
+}
+
+export interface ParsedCSV {
+  headers: string[]
+  rows: string[][]
+  /** Lines that appeared before the header row (company name, month, etc.) */
+  metadataLines: string[]
+}
+
+/**
  * Parse a CSV file content (string or Buffer) into headers and row arrays.
  *
- * Features:
- * - Removes UTF-8 BOM if present
+ * Key behaviour:
+ * - Removes UTF-8 / Latin-1 BOM if present
  * - Auto-detects semicolon vs comma delimiter
- * - Handles quoted fields with embedded delimiters and escaped quotes
- * - Trims whitespace from field values
+ * - Scans up to the first 10 lines to find the REAL header row
+ *   (payroll files have 4 metadata lines before the actual column headers)
+ * - Returns metadataLines so callers can extract company name / salary month
  */
-export function parseCSV(
-  content: string | Buffer
-): { headers: string[]; rows: string[][] } {
-  // Convert buffer to string
+export function parseCSV(content: string | Buffer): ParsedCSV {
   let text: string
   if (Buffer.isBuffer(content)) {
-    text = content.toString('utf-8')
+    // Try latin1 first (Sparkasse / DATEV files are often ISO-8859-1)
+    text = content.toString('latin1')
   } else {
     text = content
   }
 
-  // Strip UTF-8 BOM
-  if (text.charCodeAt(0) === 0xfeff) {
+  // Strip BOM (UTF-8: EF BB BF, or latin1 byte 0xFE/0xFF at start)
+  if (text.charCodeAt(0) === 0xfeff || text.charCodeAt(0) === 0xfe || text.charCodeAt(0) === 0xff) {
     text = text.slice(1)
   }
 
@@ -314,26 +328,44 @@ export function parseCSV(
   const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
 
   // Remove trailing empty lines
-  while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
-    lines.pop()
-  }
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
 
-  if (lines.length === 0) {
-    return { headers: [], rows: [] }
-  }
+  if (lines.length === 0) return { headers: [], rows: [], metadataLines: [] }
 
   const delimiter = detectDelimiter(lines)
 
-  const [headerLine, ...dataLines] = lines
-  const headers = parseCsvLine(headerLine, delimiter).map((h) => h.trim())
+  // ── Find the real header row ──────────────────────────────────────────────
+  // Scan the first 10 lines and pick the one with the highest header score.
+  // Fall back to line 0 if nothing scores above 0.
+  let headerLineIdx = 0
+  let bestScore = -1
+
+  const scanLimit = Math.min(10, lines.length)
+  for (let i = 0; i < scanLimit; i++) {
+    const line = lines[i]
+    if (line.trim() === '' || line.trim() === ';') continue
+    const fields = parseCsvLine(line, delimiter).map(f => f.trim())
+    const score = headerScore(fields)
+    if (score > bestScore) {
+      bestScore = score
+      headerLineIdx = i
+    }
+  }
+
+  const metadataLines = lines.slice(0, headerLineIdx)
+  const headerLine = lines[headerLineIdx]
+  const dataLines = lines.slice(headerLineIdx + 1)
+
+  const headers = parseCsvLine(headerLine, delimiter).map(h => h.trim())
 
   const rows: string[][] = []
-
   for (const line of dataLines) {
-    if (line.trim() === '') continue
-    const fields = parseCsvLine(line, delimiter).map((f) => f.trim())
+    if (line.trim() === '' || line.trim() === ';') continue
+    const fields = parseCsvLine(line, delimiter).map(f => f.trim())
+    // Skip rows that are entirely empty or just semicolons
+    if (fields.every(f => f === '')) continue
     rows.push(fields)
   }
 
-  return { headers, rows }
+  return { headers, rows, metadataLines }
 }
