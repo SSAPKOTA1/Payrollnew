@@ -77,16 +77,17 @@ export async function GET(
       })
       const reconRows = await prisma.reconciliationRecord.findMany({
         where: { companyId: id, salaryMonth: activeMonth },
-        select: { employeeId: true, status: true },
+        select: { employeeId: true, status: true, paidAmount: true },
       })
-      const reconMap = new Map(reconRows.map((r) => [r.employeeId, r.status]))
+      const reconMap = new Map(reconRows.map((r) => [r.employeeId, { status: r.status, paidAmount: Number(r.paidAmount ?? 0) }]))
       employeeMonthData = payrollRows.map((r) => ({
         id: r.employee.id,
         name: r.employee.name,
         employeeId: r.employee.employeeId,
         grossSalary: Number(r.grossSalary),
         auszahlungsbetrag: Number(r.auszahlungsbetrag),
-        reconciliationStatus: reconMap.get(r.employeeId) ?? null,
+        paidAmount: reconMap.get(r.employeeId)?.paidAmount ?? null,
+        reconciliationStatus: reconMap.get(r.employeeId)?.status ?? null,
       }))
     }
 
