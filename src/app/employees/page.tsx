@@ -8,7 +8,9 @@ const fmt = (n: number) =>
   n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 })
 
 interface EmployeeCompany {
-  company: { id: string; name: string; shortName: string | null }
+  id: string
+  name: string
+  shortName: string | null
 }
 
 interface Employee {
@@ -17,12 +19,12 @@ interface Employee {
   name: string
   iban: string | null
   companies: EmployeeCompany[]
-  payrollRecords: Array<{
+  latestPayroll: {
     salaryMonth: string
     netSalary: number
     grossSalary: number
     auszahlungsbetrag: number
-  }>
+  } | null
 }
 
 interface Company {
@@ -135,7 +137,7 @@ export default function EmployeesPage() {
               </thead>
               <tbody className="divide-y divide-gray-800">
                 {employees.map((emp) => {
-                  const latestPayroll = emp.payrollRecords[0]
+                  const latestPayroll = emp.latestPayroll
                   return (
                     <tr
                       key={emp.id}
@@ -160,10 +162,10 @@ export default function EmployeesPage() {
                         <div className="flex flex-wrap gap-1">
                           {emp.companies.map((ce) => (
                             <span
-                              key={ce.company.id}
+                              key={ce.id}
                               className="text-xs bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded px-1.5 py-0.5"
                             >
-                              {ce.company.shortName ?? ce.company.name}
+                              {ce.shortName ?? ce.name}
                             </span>
                           ))}
                           {emp.companies.length === 0 && <span className="text-gray-600 text-xs">None</span>}
