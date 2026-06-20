@@ -5,7 +5,7 @@
  */
 
 import { prisma } from './prisma'
-import { fuzzyMatchName, matchIban } from './fuzzy-matcher'
+import { exactNameMatch, fuzzyMatchName, matchIban } from './fuzzy-matcher'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,10 +73,11 @@ type BankTransaction = {
 // Scoring helpers
 // ---------------------------------------------------------------------------
 
-const WEIGHT_IBAN = 90
-const WEIGHT_NAME = 50
+// Exact name match is the primary signal (no IBAN data in typical payroll files)
+const WEIGHT_IBAN   = 90
+const WEIGHT_NAME   = 80   // raised — exact name match is very reliable
 const WEIGHT_AMOUNT = 30
-const WEIGHT_DATE = 20
+const WEIGHT_DATE   = 20
 const MAX_SCORE = WEIGHT_IBAN + WEIGHT_NAME + WEIGHT_AMOUNT + WEIGHT_DATE
 
 /**
@@ -119,13 +120,21 @@ function scoreMatch(
     }
   }
 
-  // --- Name match (50 pts, fuzzy) ---
+  // --- Name match (80 pts) ---
+  // Exact match: all name tokens must be present in both names (order-insensitive).
+  // e.g. "Aryal, Ramesh" matches "Ramesh Aryal" but NOT "R. Aryal".
   if (payroll.employeeName && tx.counterpartyName) {
-    const nameSimilarity = fuzzyMatchName(payroll.employeeName, tx.counterpartyName)
-    if (nameSimilarity >= 70) {
-      const nameScore = Math.round((nameSimilarity / 100) * WEIGHT_NAME)
-      score += nameScore
-      notes.push(`Name match: ${nameSimilarity}%`)
+    if (exactNameMatch(payroll.employeeName, tx.counterpartyName)) {
+      score += WEIGHT_NAME
+      notes.push('Name matched exactly')
+    } else {
+      // Partial credit only for high fuzzy similarity (≥85%) — catches minor typos in bank data
+      const nameSimilarity = fuzzyMatchName(payroll.employeeName, tx.counterpartyName)
+      if (nameSimilarity >= 85) {
+        const nameScore = Math.round((nameSimilarity / 100) * WEIGHT_NAME * 0.6)
+        score += nameScore
+        notes.push(`Name close match: ${nameSimilarity}%`)
+      }
     }
   }
 

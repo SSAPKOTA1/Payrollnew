@@ -25,6 +25,7 @@ interface Employee {
     grossSalary: number
     auszahlungsbetrag: number
   } | null
+  reconciliationStatus: string | null
 }
 
 interface Company {
@@ -182,7 +183,10 @@ export default function EmployeesPage() {
                         )}
                       </td>
                       <td className="px-5 py-3">
-                        <StatusBadge status={latestPayroll ? 'PAID' : 'UNPAID'} size="sm" />
+                        <StatusBadge
+                          status={emp.reconciliationStatus ?? (latestPayroll ? 'NEEDS_REVIEW' : 'UNPAID')}
+                          size="sm"
+                        />
                       </td>
                     </tr>
                   )

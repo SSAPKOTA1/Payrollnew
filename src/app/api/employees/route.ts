@@ -62,6 +62,19 @@ export async function GET(request: NextRequest) {
       prisma.employee.count({ where }),
     ])
 
+    // Fetch latest reconciliation status for each employee in one query
+    const employeeIds = employees.map((e) => e.id)
+    const reconRecords = await prisma.reconciliationRecord.findMany({
+      where: { employeeId: { in: employeeIds } },
+      orderBy: { salaryMonth: 'desc' },
+      select: { employeeId: true, salaryMonth: true, status: true },
+    })
+    // Keep only the latest record per employee
+    const reconMap = new Map<string, { salaryMonth: string; status: string }>()
+    for (const r of reconRecords) {
+      if (!reconMap.has(r.employeeId)) reconMap.set(r.employeeId, r)
+    }
+
     const result = employees.map((emp) => ({
       id: emp.id,
       employeeId: emp.employeeId,
@@ -86,6 +99,7 @@ export async function GET(request: NextRequest) {
             auszahlungsbetrag: Number(emp.payrollRecords[0].auszahlungsbetrag),
           }
         : null,
+      reconciliationStatus: reconMap.get(emp.id)?.status ?? null,
     }))
 
     return NextResponse.json({ employees: result, total, page, limit })

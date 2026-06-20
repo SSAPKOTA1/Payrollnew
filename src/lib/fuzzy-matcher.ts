@@ -1,6 +1,6 @@
 /**
  * fuzzy-matcher.ts
- * Utilities for fuzzy string matching, IBAN normalization, and name comparison.
+ * Utilities for name matching, IBAN normalization, and string comparison.
  */
 
 /**
@@ -10,7 +10,6 @@ export function levenshteinDistance(a: string, b: string): number {
   const m = a.length
   const n = b.length
 
-  // Allocate a (m+1) x (n+1) matrix
   const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
     Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
   )
@@ -29,118 +28,97 @@ export function levenshteinDistance(a: string, b: string): number {
 }
 
 /**
- * Normalize a German name string:
+ * Normalize a name for comparison:
  * - Lowercase
- * - Replace umlauts: ae->ä, oe->ö, ue->ü (and reverse)
- * - Trim extra whitespace
+ * - German umlauts → ascii equivalents
+ * - Strip punctuation except hyphens
+ * - Collapse whitespace
  */
-function normalizeGermanName(name: string): string {
+function normalizeName(name: string): string {
   return name
     .toLowerCase()
-    .replace(/ä/g, 'ae')
-    .replace(/ö/g, 'oe')
-    .replace(/ü/g, 'ue')
-    .replace(/ß/g, 'ss')
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/ae/g, 'ae').replace(/oe/g, 'oe').replace(/ue/g, 'ue')
+    .replace(/[^a-z0-9\s\-]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
 /**
- * Split a full name into tokens (words), filtering empty strings.
+ * Split a name into individual tokens, splitting on spaces and commas.
+ * e.g. "Aryal, Ramesh" → ["aryal", "ramesh"]
+ * e.g. "Ramesh Aryal"  → ["ramesh", "aryal"]
  */
 function nameTokens(name: string): string[] {
   return name.split(/[\s,]+/).filter(Boolean)
 }
 
 /**
- * Check whether token b is an abbreviation of token a:
- * e.g. "J." matches "John", "M." matches "Mueller"
- */
-function isAbbreviation(abbreviated: string, full: string): boolean {
-  if (abbreviated.endsWith('.') && abbreviated.length === 2) {
-    return full.startsWith(abbreviated[0])
-  }
-  if (abbreviated.length === 1) {
-    return full.startsWith(abbreviated)
-  }
-  return false
-}
-
-/**
- * Score two token arrays against each other, allowing abbreviation matches.
- * Returns a value 0-1.
- */
-function scoreTokenSets(tokensA: string[], tokensB: string[]): number {
-  if (tokensA.length === 0 || tokensB.length === 0) return 0
-
-  let matched = 0
-  const usedB = new Set<number>()
-
-  for (const ta of tokensA) {
-    let bestScore = 0
-    let bestIdx = -1
-
-    for (let i = 0; i < tokensB.length; i++) {
-      if (usedB.has(i)) continue
-      const tb = tokensB[i]
-
-      let score = 0
-      if (ta === tb) {
-        score = 1
-      } else if (isAbbreviation(ta, tb) || isAbbreviation(tb, ta)) {
-        score = 0.8
-      } else {
-        const maxLen = Math.max(ta.length, tb.length)
-        if (maxLen > 0) {
-          const dist = levenshteinDistance(ta, tb)
-          score = Math.max(0, 1 - dist / maxLen)
-        }
-      }
-
-      if (score > bestScore) {
-        bestScore = score
-        bestIdx = i
-      }
-    }
-
-    if (bestScore > 0.5) {
-      matched += bestScore
-      if (bestIdx >= 0) usedB.add(bestIdx)
-    }
-  }
-
-  // Normalize by the larger set
-  const maxTokens = Math.max(tokensA.length, tokensB.length)
-  return matched / maxTokens
-}
-
-/**
- * Fuzzy match two person names, returning a score 0-100.
+ * Exact name match — both name parts must be present, order doesn't matter.
  *
- * Handles:
- * - Reversed name order (Smith John vs John Smith)
- * - Abbreviations (J. Smith)
- * - German umlauts (ae->ä normalization)
- * - Case insensitive comparison
+ * Rules:
+ *  - Splits both names into tokens (words)
+ *  - Every token in the payroll name must appear exactly in the bank name
+ *  - Every token in the bank name must appear exactly in the payroll name
+ *  - Order is irrelevant: "Aryal, Ramesh" == "Ramesh Aryal"
+ *  - Returns true/false
+ *
+ * Examples:
+ *   exactNameMatch("Aryal, Ramesh", "Ramesh Aryal")     → true
+ *   exactNameMatch("Bogati, Umesh Jung", "Umesh Jung Bogati") → true
+ *   exactNameMatch("Aryal, Ramesh", "R. Aryal")          → false (abbreviation not accepted)
+ *   exactNameMatch("Aryal, Ramesh", "Aryal")              → false (missing first name)
+ */
+export function exactNameMatch(payrollName: string, bankName: string): boolean {
+  const t1 = nameTokens(normalizeName(payrollName))
+  const t2 = nameTokens(normalizeName(bankName))
+
+  if (t1.length === 0 || t2.length === 0) return false
+
+  const set1 = new Set(t1)
+  const set2 = new Set(t2)
+
+  // All tokens from payroll must be in bank name and vice versa
+  for (const t of set1) if (!set2.has(t)) return false
+  for (const t of set2) if (!set1.has(t)) return false
+
+  return true
+}
+
+/**
+ * Fuzzy match — used as fallback when exact match fails.
+ * Returns 0-100 score.
  */
 export function fuzzyMatchName(name1: string, name2: string): number {
-  const n1 = normalizeGermanName(name1)
-  const n2 = normalizeGermanName(name2)
+  const n1 = normalizeName(name1)
+  const n2 = normalizeName(name2)
 
   if (n1 === n2) return 100
+
+  // Try exact token match first
+  if (exactNameMatch(name1, name2)) return 100
 
   const tokens1 = nameTokens(n1)
   const tokens2 = nameTokens(n2)
 
-  // Try forward match
-  const forwardScore = scoreTokenSets(tokens1, tokens2)
+  let matched = 0
+  const usedB = new Set<number>()
 
-  // Try reversed tokens for name1
-  const reversedTokens1 = [...tokens1].reverse()
-  const reverseScore = scoreTokenSets(reversedTokens1, tokens2)
+  for (const ta of tokens1) {
+    let bestScore = 0
+    let bestIdx = -1
+    for (let i = 0; i < tokens2.length; i++) {
+      if (usedB.has(i)) continue
+      const tb = tokens2[i]
+      const maxLen = Math.max(ta.length, tb.length)
+      const score = maxLen > 0 ? Math.max(0, 1 - levenshteinDistance(ta, tb) / maxLen) : 0
+      if (score > bestScore) { bestScore = score; bestIdx = i }
+    }
+    if (bestScore > 0.5) { matched += bestScore; if (bestIdx >= 0) usedB.add(bestIdx) }
+  }
 
-  const best = Math.max(forwardScore, reverseScore)
-  return Math.round(best * 100)
+  const maxTokens = Math.max(tokens1.length, tokens2.length)
+  return Math.round((matched / maxTokens) * 100)
 }
 
 /**
