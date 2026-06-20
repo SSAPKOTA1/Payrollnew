@@ -113,33 +113,45 @@ function classifyFile(filePath, content) {
     return { type: 'UNKNOWN', confidence: 0, detectedCompany: null };
   }
 
-  // Only look at the first line (header row) for keyword matching
-  const headerLine = lines[0];
+  const fileName = require('path').basename(filePath).toLowerCase();
 
-  const payrollHits = countMatches(headerLine, PAYROLL_KEYWORDS);
-  const bankHits = countMatches(headerLine, BANK_KEYWORDS);
+  // Filename-based detection (most reliable — DATEV files always start with lojo_)
+  if (fileName.startsWith('lojo') || fileName.includes('lohn') || fileName.includes('payroll')) {
+    const detectedCompany = detectCompany(lines);
+    return { type: 'PAYROLL', confidence: 1, detectedCompany };
+  }
+  if (fileName.includes('umsatz') || fileName.includes('konto') || fileName.includes('bank')) {
+    return { type: 'BANK_TRANSACTION', confidence: 1, detectedCompany: null };
+  }
 
-  // If header matching is weak, also scan all lines (catches metadata-first layouts)
+  // Scan all lines (DATEV payroll files have 4 metadata lines before the real header)
   const fullText = lines.join(' ');
   const payrollFull = countMatches(fullText, PAYROLL_KEYWORDS);
   const bankFull = countMatches(fullText, BANK_KEYWORDS);
+
+  // Also weight the first line that looks like an actual header (most keywords)
+  const bestHeaderLine = lines.slice(0, 10).reduce((best, line) => {
+    const p = countMatches(line, PAYROLL_KEYWORDS);
+    const b = countMatches(line, BANK_KEYWORDS);
+    return (p + b) > (countMatches(best, PAYROLL_KEYWORDS) + countMatches(best, BANK_KEYWORDS)) ? line : best;
+  }, lines[0]);
+  const payrollHits = countMatches(bestHeaderLine, PAYROLL_KEYWORDS);
+  const bankHits = countMatches(bestHeaderLine, BANK_KEYWORDS);
 
   const detectedCompany = detectCompany(lines);
 
   let type = 'UNKNOWN';
   let confidence = 0;
 
-  const payrollScore = Math.max(payrollHits * 2, payrollFull); // header hits weighted more
+  const payrollScore = Math.max(payrollHits * 2, payrollFull);
   const bankScore = Math.max(bankHits * 2, bankFull);
 
   if (payrollScore === 0 && bankScore === 0) {
-    // No keywords found at all
     return { type: 'UNKNOWN', confidence: 0, detectedCompany };
   }
 
   if (payrollScore >= bankScore) {
     type = 'PAYROLL';
-    // Confidence: number of matched keywords out of total payroll keywords, capped at 1
     confidence = Math.min(1, payrollScore / (PAYROLL_KEYWORDS.length * 0.5));
   } else {
     type = 'BANK_TRANSACTION';
